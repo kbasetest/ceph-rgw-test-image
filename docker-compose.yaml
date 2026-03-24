@@ -1,0 +1,15 @@
+services:
+  ceph:
+    build: .
+    environment:
+      RGW_PORT: "8080"
+      RGW_ACCESS_KEY: "testaccesskey"
+      RGW_SECRET_KEY: "testsecretkey"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
