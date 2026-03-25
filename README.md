@@ -1,6 +1,6 @@
 # ceph-rgw-test-image
 
-A self-contained Ceph cluster in a single Docker container, intended for **development and testing only**. It provides a real Ceph RADOS Gateway with full IAM support (S3, IAM, STS APIs) and a working dashboard, with no host dependencies beyond Docker.
+A self-contained Ceph cluster in a single Docker container, intended for **development and testing only**. It provides a real Ceph RADOS Gateway with full IAM support (S3, IAM, STS APIs) and a dashboard, with no host dependencies beyond Docker.
 
 ## ⚠️ Not for production
 
@@ -83,3 +83,13 @@ Default output format [None]:
 ## Dashboard
 
 The Ceph dashboard is available at `http://localhost:8445` (when using the compose file above) with credentials `admin` / `admin`. It is useful for inspecting cluster state, browsing buckets, and viewing IAM resources during development.
+
+## Known issues
+
+### RGW section of the dashboard does not work
+
+The **Object Gateway** section of the dashboard (daemons, buckets, users) shows no data and reports RGW as not running, even though the S3 endpoint is fully functional.
+
+In Ceph v20 (Tentacle), RGW no longer registers itself in the MON service map when running outside of cephadm. The dashboard discovers RGW daemons by reading the service map, so it cannot find RGW in a manually deployed cluster. This appears to be a deliberate design decision in Tentacle — the dashboard's RGW integration is built around cephadm as the deployment mechanism.
+
+The S3, IAM, and STS APIs are unaffected.
