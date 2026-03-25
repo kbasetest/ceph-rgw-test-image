@@ -82,7 +82,7 @@ Default output format [None]:
 
 ## Dashboard
 
-The Ceph dashboard is available at `http://localhost:8445` (when using the compose file above) with credentials `admin` / `admin`. It is useful for inspecting cluster state, browsing buckets, and viewing IAM resources during development.
+The Ceph dashboard is available at `http://localhost:8445` (when using the compose file above) with credentials `admin` / `admin`.
 
 ## Known issues
 
