@@ -28,6 +28,9 @@ timeout 30 bash -c "until ceph -s &>/dev/null; do sleep 1; done"
 # Start MGR
 ceph-mgr --id a &
 
+echo "Waiting for MGR..."
+timeout 60 bash -c "until ceph mgr stat 2>/dev/null | grep -q 'active_name'; do sleep 1; done"
+
 # Bootstrap and start OSD (memstore: in-memory, no block device or privileges needed)
 # Initialise the OSD's data directory (one-shot).
 ceph-osd --id 0 --osd-objectstore memstore --mkfs
