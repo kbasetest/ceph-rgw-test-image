@@ -5,6 +5,10 @@ RGW_PORT="${RGW_PORT:-8080}"
 RGW_ACCESS_KEY="${RGW_ACCESS_KEY:-testaccesskey}"
 RGW_SECRET_KEY="${RGW_SECRET_KEY:-testsecretkey}"
 
+# Forward SIGTERM/SIGINT to all background daemons so docker stop completes
+# immediately rather than waiting for the 10-second kill timeout.
+trap 'kill $(jobs -p) 2>/dev/null' TERM INT
+
 # Always start fresh — memstore is in-memory so there is nothing to recover
 rm -rf /var/lib/ceph/mon/ceph-a /var/lib/ceph/mgr/ceph-a /var/lib/ceph/osd/ceph-0 /tmp/monmap
 mkdir -p /var/lib/ceph/mon/ceph-a /var/lib/ceph/mgr/ceph-a /var/lib/ceph/osd/ceph-0 /var/log/ceph
