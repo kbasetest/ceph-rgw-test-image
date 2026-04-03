@@ -6,13 +6,17 @@ RGW_ACCESS_KEY="${RGW_ACCESS_KEY:-testaccesskey}"
 RGW_SECRET_KEY="${RGW_SECRET_KEY:-testsecretkey}"
 
 # Always start fresh — memstore is in-memory so there is nothing to recover
-rm -rf /var/lib/ceph/mon/ceph-a /var/lib/ceph/mgr/ceph-a /var/lib/ceph/osd/ceph-0
+rm -rf /var/lib/ceph/mon/ceph-a /var/lib/ceph/mgr/ceph-a /var/lib/ceph/osd/ceph-0 /tmp/monmap
 mkdir -p /var/lib/ceph/mon/ceph-a /var/lib/ceph/mgr/ceph-a /var/lib/ceph/osd/ceph-0 /var/log/ceph
 
 # Generate a cluster FSID and stamp it into ceph.conf so all daemons agree
 # without needing to negotiate it via the MON at bootstrap time
 FSID=$(uuidgen)
-sed -i "s/\[global\]/[global]\n    fsid = $FSID/" /etc/ceph/ceph.conf
+if grep -q 'fsid' /etc/ceph/ceph.conf; then
+    sed -i "s/fsid = .*/fsid = $FSID/" /etc/ceph/ceph.conf
+else
+    sed -i "s/\[global\]/[global]\n    fsid = $FSID/" /etc/ceph/ceph.conf
+fi
 
 # Build a monmap — a binary description of the monitor topology (name + address).
 # The MON needs this before it can initialise its on-disk state.
