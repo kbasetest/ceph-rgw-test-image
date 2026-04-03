@@ -33,11 +33,8 @@ ceph-mon --id a &
 echo "Waiting for MON..."
 timeout 30 bash -c "until ceph -s &>/dev/null; do sleep 1; done"
 
-# Start MGR
+# Start MGR and OSD in parallel — both only need MON, they are independent of each other.
 ceph-mgr --id a &
-
-echo "Waiting for MGR..."
-timeout 60 bash -c "until ceph mgr module ls 2>/dev/null | grep -q 'dashboard'; do sleep 1; done"
 
 # Bootstrap and start OSD (memstore: in-memory, no block device or privileges needed)
 # Initialise the OSD's data directory (one-shot).
@@ -47,8 +44,13 @@ ceph osd create
 # Start the OSD daemon.
 ceph-osd --id 0 --osd-objectstore memstore &
 
-echo "Waiting for OSD..."
-timeout 30 bash -c "until ceph osd stat 2>/dev/null | grep -q '1 up'; do sleep 1; done"
+# Wait for both concurrently — capture PIDs so we don't accidentally wait on the daemons.
+echo "Waiting for MGR and OSD..."
+timeout 60 bash -c "until ceph mgr module ls 2>/dev/null | grep -q 'dashboard'; do sleep 1; done" &
+MGR_WAIT=$!
+timeout 30 bash -c "until ceph osd stat 2>/dev/null | grep -q '1 up'; do sleep 1; done" &
+OSD_WAIT=$!
+wait $MGR_WAIT $OSD_WAIT
 
 # Enable the dashboard (MGR module). Disable SSL and set the port, then create an admin user.
 # --force-password bypasses the password strength check (fine for a test image).
