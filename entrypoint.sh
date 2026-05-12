@@ -78,6 +78,20 @@ radosgw-admin user create \
   --access-key="${RGW_ACCESS_KEY}" \
   --secret="${RGW_SECRET_KEY}"
 
+# Create additional users from RGW_USERS (format: "name:access_key:secret_key;name2:key2:secret2")
+if [ -n "${RGW_USERS:-}" ]; then
+    IFS=';' read -ra _USER_ENTRIES <<< "${RGW_USERS}"
+    for _entry in "${_USER_ENTRIES[@]}"; do
+        IFS=':' read -r _uname _uaccess _usecret <<< "${_entry}"
+        radosgw-admin user create \
+          --uid="${_uname}" \
+          --display-name="${_uname}" \
+          --account-id="${ACCOUNT_ID}" \
+          --access-key="${_uaccess}" \
+          --secret="${_usecret}"
+    done
+fi
+
 echo ""
 echo "========================================="
 echo " RGW ready"
@@ -85,6 +99,13 @@ echo "========================================="
 echo " S3 endpoint : http://127.0.0.1:${RGW_PORT}"
 echo " Access key  : ${RGW_ACCESS_KEY}"
 echo " Secret key  : ${RGW_SECRET_KEY}"
+if [ -n "${RGW_USERS:-}" ]; then
+    IFS=';' read -ra _USER_ENTRIES <<< "${RGW_USERS}"
+    for _entry in "${_USER_ENTRIES[@]}"; do
+        IFS=':' read -r _uname _uaccess _usecret <<< "${_entry}"
+        echo " Extra user  : ${_uname}  key=${_uaccess}  secret=${_usecret}"
+    done
+fi
 echo " Dashboard   : http://127.0.0.1:8443  (admin / admin)"
 echo "========================================="
 

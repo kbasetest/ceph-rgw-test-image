@@ -5,6 +5,7 @@ services:
       RGW_PORT: "8080"
       RGW_ACCESS_KEY: "testaccesskey"
       RGW_SECRET_KEY: "testsecretkey"
+      RGW_USERS: "user1:access1:secret1;user2:access2:secret2"
     ports:
       - "8080:8080"
       - "8445:8443"

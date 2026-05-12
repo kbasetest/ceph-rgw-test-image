@@ -79,6 +79,7 @@ Default output format [None]:
 | `RGW_PORT` | `8080` | Port RGW listens on inside the container |
 | `RGW_ACCESS_KEY` | `testaccesskey` | S3 access key for the pre-created root user |
 | `RGW_SECRET_KEY` | `testsecretkey` | S3 secret key for the pre-created root user |
+| `RGW_USERS` | _(none)_ | Semicolon-separated list of additional account users to create, each as `name:access_key:secret_key` (e.g. `alice:keyA:secretA;bob:keyB:secretB`) |
 
 ## Dashboard
 
