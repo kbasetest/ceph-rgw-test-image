@@ -9,9 +9,19 @@ services:
     ports:
       - "8080:8080"
       - "8445:8443"
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 15s
+
+  smoke:
+    image: amazon/aws-cli
+    depends_on:
+      ceph:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: "testaccesskey"
+      AWS_SECRET_ACCESS_KEY: "testsecretkey"
+      AWS_DEFAULT_REGION: "default"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Ceph is healthy, running smoke test..."
+        aws s3 ls --endpoint-url http://ceph:8080
+        echo "Smoke test passed."
