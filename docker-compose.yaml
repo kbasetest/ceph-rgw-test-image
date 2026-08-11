@@ -9,6 +9,8 @@ services:
     ports:
       - "8080:8080"
       - "8445:8443"
+    volumes:
+      - ceph-data:/var/lib/ceph
 
   smoke:
     image: amazon/aws-cli
@@ -25,3 +27,6 @@ services:
         echo "Ceph is healthy, running smoke test..."
         aws s3 ls --endpoint-url http://ceph:8080
         echo "Smoke test passed."
+
+volumes:
+  ceph-data:

@@ -9,24 +9,44 @@ RGW_SECRET_KEY="${RGW_SECRET_KEY:-testsecretkey}"
 # immediately rather than waiting for the 10-second kill timeout.
 trap 'kill $(jobs -p) 2>/dev/null' TERM INT
 
-# Always start fresh — memstore is in-memory so there is nothing to recover
-rm -rf /var/lib/ceph/mon/ceph-a /var/lib/ceph/mgr/ceph-a /var/lib/ceph/osd/ceph-0 /tmp/monmap
+FSID_FILE="/var/lib/ceph/fsid"
+MON_STORE="/var/lib/ceph/mon/ceph-a/store.db"
+
 mkdir -p /var/lib/ceph/mon/ceph-a /var/lib/ceph/mgr/ceph-a /var/lib/ceph/osd/ceph-0 /var/log/ceph
 
-# Generate a cluster FSID and stamp it into ceph.conf so all daemons agree
-# without needing to negotiate it via the MON at bootstrap time
-FSID=$(uuidgen)
+# Resume iff a prior run left behind both a monitor store and its FSID.
+# Otherwise treat this as a fresh start: wipe any partial state (e.g. from an
+# interrupted first boot) and bootstrap from scratch.
+if [ -d "$MON_STORE" ] && [ -f "$FSID_FILE" ]; then
+    FIRST_RUN=false
+    FSID=$(cat "$FSID_FILE")
+    echo "Existing cluster data found (fsid=${FSID}); resuming."
+else
+    FIRST_RUN=true
+    rm -rf /var/lib/ceph/mon/ceph-a /var/lib/ceph/mgr/ceph-a /var/lib/ceph/osd/ceph-0 /tmp/monmap
+    mkdir -p /var/lib/ceph/mon/ceph-a /var/lib/ceph/mgr/ceph-a /var/lib/ceph/osd/ceph-0
+    FSID=$(uuidgen)
+    echo "$FSID" > "$FSID_FILE"
+    echo "No existing cluster data found; bootstrapping fresh cluster (fsid=${FSID})."
+fi
+
+# Stamp the FSID into ceph.conf so all daemons agree without needing to
+# negotiate it via the MON at bootstrap time. ceph.conf itself is baked into
+# the image layer (not persisted), so this runs on every start regardless of
+# first-run vs resume.
 if grep -q 'fsid' /etc/ceph/ceph.conf; then
     sed -i "s/fsid = .*/fsid = $FSID/" /etc/ceph/ceph.conf
 else
     sed -i "s/\[global\]/[global]\n    fsid = $FSID/" /etc/ceph/ceph.conf
 fi
 
-# Build a monmap — a binary description of the monitor topology (name + address).
-# The MON needs this before it can initialise its on-disk state.
-monmaptool --create --add a 127.0.0.1 --fsid "$FSID" /tmp/monmap 2>/dev/null
-# Initialise the MON's data directory (one-shot, like mkfs on a filesystem).
-ceph-mon --id a --mkfs --monmap /tmp/monmap
+if $FIRST_RUN; then
+    # Build a monmap — a binary description of the monitor topology (name + address).
+    # The MON needs this before it can initialise its on-disk state.
+    monmaptool --create --add a 127.0.0.1 --fsid "$FSID" /tmp/monmap 2>/dev/null
+    # Initialise the MON's data directory (one-shot, like mkfs on a filesystem).
+    ceph-mon --id a --mkfs --monmap /tmp/monmap
+fi
 # Start the MON daemon; everything else registers through it.
 ceph-mon --id a &
 
@@ -36,13 +56,16 @@ timeout 30 bash -c "until ceph -s &>/dev/null; do sleep 1; done"
 # Start MGR and OSD in parallel — both only need MON, they are independent of each other.
 ceph-mgr --id a &
 
-# Bootstrap and start OSD (memstore: in-memory, no block device or privileges needed)
-# Initialise the OSD's data directory (one-shot).
-ceph-osd --id 0 --osd-objectstore memstore --mkfs
-# Ask the MON to allocate an OSD slot; it assigns the ID (always 0 on a fresh cluster).
-ceph osd create
+if $FIRST_RUN; then
+    # Bootstrap the OSD. BlueStore is file-backed here (bluestore_block_size
+    # in ceph.conf, no real block/loop device) so this needs no
+    # --privileged or extra capabilities, while still persisting to disk.
+    ceph-osd --id 0 --osd-objectstore bluestore --mkfs
+    # Ask the MON to allocate an OSD slot; it assigns the ID (always 0 on a fresh cluster).
+    ceph osd create
+fi
 # Start the OSD daemon.
-ceph-osd --id 0 --osd-objectstore memstore &
+ceph-osd --id 0 --osd-objectstore bluestore &
 
 # Wait for both concurrently — capture PIDs so we don't accidentally wait on the daemons.
 echo "Waiting for MGR and OSD..."
@@ -57,7 +80,9 @@ wait $MGR_WAIT $OSD_WAIT
 ceph mgr module enable dashboard
 ceph config set mgr mgr/dashboard/ssl false
 ceph config set mgr mgr/dashboard/server_port 8443
-echo -n "admin" | ceph dashboard ac-user-create admin administrator -i - --force-password
+if ! ceph dashboard ac-user-show admin &>/dev/null; then
+    echo -n "admin" | ceph dashboard ac-user-create admin administrator -i - --force-password
+fi
 
 # Start RGW
 radosgw -f --name client.rgw.test --rgw-frontends="beast port=${RGW_PORT}" & # -f = foreground, prevents daemonization so wait $RGW_PID works
@@ -66,29 +91,38 @@ RGW_PID=$!
 echo "Waiting for RGW..."
 timeout 30 bash -c "until curl -sf http://127.0.0.1:${RGW_PORT} &>/dev/null; do sleep 1; done"
 
-# Create account and root user
-ACCOUNT_JSON=$(radosgw-admin account create --account-name="testaccount")
-ACCOUNT_ID=$(echo "${ACCOUNT_JSON}" | jq -r '.id')
+# Create account and root user (first run only — account create fails if it
+# already exists). On resume, look up the account ID created previously.
+if $FIRST_RUN; then
+    ACCOUNT_JSON=$(radosgw-admin account create --account-name="testaccount")
+    ACCOUNT_ID=$(echo "${ACCOUNT_JSON}" | jq -r '.id')
 
-radosgw-admin user create \
-  --uid="root" \
-  --display-name="AccountRoot" \
-  --account-id="${ACCOUNT_ID}" \
-  --account-root \
-  --access-key="${RGW_ACCESS_KEY}" \
-  --secret="${RGW_SECRET_KEY}"
+    radosgw-admin user create \
+      --uid="root" \
+      --display-name="AccountRoot" \
+      --account-id="${ACCOUNT_ID}" \
+      --account-root \
+      --access-key="${RGW_ACCESS_KEY}" \
+      --secret="${RGW_SECRET_KEY}"
+else
+    ACCOUNT_ID=$(radosgw-admin account get --account-name="testaccount" | jq -r '.id')
+fi
 
 # Create additional users from RGW_USERS (format: "name:access_key:secret_key;name2:key2:secret2")
+# Skip any that already exist so restarts don't fail, but still pick up
+# entries added to RGW_USERS since the last start.
 if [ -n "${RGW_USERS:-}" ]; then
     IFS=';' read -ra _USER_ENTRIES <<< "${RGW_USERS}"
     for _entry in "${_USER_ENTRIES[@]}"; do
         IFS=':' read -r _uname _uaccess _usecret <<< "${_entry}"
-        radosgw-admin user create \
-          --uid="${_uname}" \
-          --display-name="${_uname}" \
-          --account-id="${ACCOUNT_ID}" \
-          --access-key="${_uaccess}" \
-          --secret="${_usecret}"
+        if ! radosgw-admin user info --uid="${_uname}" &>/dev/null; then
+            radosgw-admin user create \
+              --uid="${_uname}" \
+              --display-name="${_uname}" \
+              --account-id="${ACCOUNT_ID}" \
+              --access-key="${_uaccess}" \
+              --secret="${_usecret}"
+        fi
     done
 fi
 

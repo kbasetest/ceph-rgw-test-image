@@ -1,25 +1,61 @@
 # ceph-rgw-test-image
 
-A self-contained Ceph cluster in a single Docker container, intended for **development and testing only**. It provides a real Ceph RADOS Gateway with full IAM support (S3, IAM, STS APIs) and a dashboard, with no host dependencies beyond Docker.
+A self-contained Ceph cluster in a single Docker container, intended for
+**development and testing only**. It provides a real Ceph RADOS Gateway with full IAM support
+(S3, IAM, STS APIs) and a dashboard, with no host dependencies beyond Docker.
 
 ## ⚠️ Not for production
 
 This image makes several deliberate trade-offs for simplicity:
 
-- All object data is stored in RAM and is **wiped every time the container restarts**
 - Authentication between Ceph daemons is disabled
 - Dashboard credentials are hardcoded (`admin` / `admin`)
 - A single monitor, single OSD, and single RGW share one container
 
 ## Why a full Ceph cluster, not a lightweight stub?
 
-The obvious approach for a test fixture is a lightweight standalone RGW using the `dbstore` backend, which runs without any monitor, OSD, or MGR. We tried this first, but `dbstore` does not implement the Ceph account API (`account create` returns `EOPNOTSUPP`). Since the account model is what enables the full IAM surface (user policies, roles, AssumeRole, etc.), `dbstore` was a dead end for our use case.
+The obvious approach for a test fixture is a lightweight standalone RGW using the `dbstore`
+backend, which runs without any monitor, OSD, or MGR. We tried this first, but `dbstore` does
+not implement the Ceph account API (`account create` returns `EOPNOTSUPP`). Since the account
+model is what enables the full IAM surface (user policies, roles, AssumeRole, etc.),
+`dbstore` was a dead end for our use case.
 
-The next question was whether a real Ceph cluster requires `--privileged` to run in Docker. It does not, provided the OSD uses the `memstore` backend instead of `BlueStore`. `memstore` keeps all object data in RAM — no block devices, no loop devices, no elevated capabilities needed. This makes the image safe to use in GitHub Actions runners and on developer laptops without any special Docker configuration.
+The next question was whether a real Ceph cluster requires `--privileged` to run in Docker.
+It does not, provided the OSD uses a **file-backed BlueStore** instead of a real block or
+loop device. Setting `bluestore_block_size` in `ceph.conf` makes `ceph-osd --mkfs` fallocate
+a plain file as its `block` device instead of requiring one — the same mechanism Ceph's
+own `vstart.sh` dev clusters use. No block devices, no loop devices, no elevated capabilities
+needed. This makes the image safe to use in GitHub Actions runners and on developer laptops
+without any special Docker configuration.
 
-## Why is all data in memory?
+## Does data survive a restart?
 
-`memstore` is an in-memory OSD backend intended for testing. It was chosen specifically because it avoids the need for block devices or `--privileged`. The trade-off is that all S3 objects, buckets, users, and IAM state are lost when the container stops. For a test fixture that starts fresh for each test run, this is the correct behaviour.
+Yes, if you give it a named volume. Object data, buckets, users, and IAM state are written
+to a file-backed BlueStore OSD under `/var/lib/ceph`. `docker compose` (see
+`docker-compose.yaml`) does this for you. For plain `docker run`, pass `-v ceph-data:/var/lib/ceph`
+as in the example below — without it, the image's `VOLUME` declaration still creates a volume,
+but it's an unnamed one tied to that specific container, and `--rm` deletes it the moment the
+container exits, so each run starts fresh.
+
+`docker stop`/`start` and `docker compose down`/`up` both preserve data as long as the volume
+isn't removed (e.g. `docker compose down -v` or `docker volume rm` will still wipe it).
+
+### Resetting / deleting the data
+
+To wipe the cluster and start completely fresh:
+
+```bash
+# Docker Compose
+docker compose down -v          # -v also removes the ceph-data volume
+
+# Plain docker run
+docker rm -f <container>        # if the container is still running/stopped
+docker volume rm ceph-data
+```
+
+`docker volume rm` fails if any container (even a stopped one) still references the
+volume — remove or stop-and-rm the container first. `docker volume ls` shows all volumes
+on the system if you're not sure of the name.
 
 ## Usage
 
@@ -31,10 +67,15 @@ docker run --rm \
   -p 8445:8443 \
   -e RGW_ACCESS_KEY=myaccesskey \
   -e RGW_SECRET_KEY=mysecretkey \
+  -v ceph-data:/var/lib/ceph \
   ghcr.io/kbasetest/ceph-rgw-test-image:latest
 ```
 
-> If you don't run Ceph locally you can use the standard `8443` port directly instead of mapping to `8445`.
+> The `-v ceph-data:/var/lib/ceph` is what makes data survive between runs — see
+> "Does data survive a restart?" above.
+
+If you don't run Ceph locally you can use the standard `8443` port directly instead of
+mapping to `8445`.
 
 The container prints a summary when ready:
 
@@ -59,7 +100,8 @@ docker compose up --build --wait
 
 ### Connecting
 
-The S3 endpoint speaks standard S3 (path-style). The root user is pre-created with the configured credentials and has full IAM permissions within the account.
+The S3 endpoint speaks standard S3 (path-style). The root user is pre-created with the configured
+credentials and has full IAM permissions within the account.
 
 Example with the AWS CLI, assuming you call your profile `cephtest`:
 
@@ -83,14 +125,20 @@ Default output format [None]:
 
 ## Dashboard
 
-The Ceph dashboard is available at `http://localhost:8445` (when using the compose file above) with credentials `admin` / `admin`.
+The Ceph dashboard is available at `http://localhost:8445` (when using the compose file above)
+with credentials `admin` / `admin`.
 
 ## Known issues
 
 ### RGW section of the dashboard does not work
 
-The **Object Gateway** section of the dashboard (daemons, buckets, users) shows no data and reports RGW as not running, even though the S3 endpoint is fully functional.
+The **Object Gateway** section of the dashboard (daemons, buckets, users) shows no data and
+reports RGW as not running, even though the S3 endpoint is fully functional.
 
-In Ceph v20 (Tentacle), RGW no longer registers itself in the MON service map when running outside of cephadm. The dashboard discovers RGW daemons by reading the service map, so it cannot find RGW in a manually deployed cluster. This appears to be a deliberate design decision in Tentacle — the dashboard's RGW integration is built around cephadm as the deployment mechanism.
+In Ceph v20 (Tentacle), RGW no longer registers itself in the MON service map when
+running outside of cephadm. The dashboard discovers RGW daemons by reading the service
+map, so it cannot find RGW in a manually deployed cluster. This appears to be a deliberate
+design decision in Tentacle — the dashboard's RGW integration is built around cephadm
+as the deployment mechanism.
 
 The S3, IAM, and STS APIs are unaffected.
