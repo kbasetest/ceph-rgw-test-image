@@ -122,6 +122,18 @@ Default output format [None]:
 | `RGW_ACCESS_KEY` | `testaccesskey` | S3 access key for the pre-created root user |
 | `RGW_SECRET_KEY` | `testsecretkey` | S3 secret key for the pre-created root user |
 | `RGW_USERS` | _(none)_ | Semicolon-separated list of additional account users to create, each as `name:access_key:secret_key` (e.g. `alice:keyA:secretA;bob:keyB:secretB`) |
+| `RGW_STS_KEY` | _(none)_ | A 16-character string, used as `rgw_sts_key`. Enables STS `AssumeRole` when set; off by default — see "STS / AssumeRole" below |
+
+## STS / AssumeRole
+
+See ["STS Configuration"](https://docs.ceph.com/en/latest/radosgw/STS/) for `rgw_sts_key` and
+`rgw_s3_auth_use_sts`. Setting `RGW_STS_KEY` sets both: `rgw_sts_key` to its value, and
+`rgw_s3_auth_use_sts` to `true` (without the latter, S3 calls made with `AssumeRole`-issued
+credentials fail `InvalidAccessKeyId` even though `AssumeRole` itself succeeds).
+
+With a Role created (`iam create-role`/`iam put-role-policy`, or use the account root user plus
+an inline session `Policy` on the `AssumeRole` call itself to scope a session down), `AssumeRole`
+works like real AWS IAM. See the `smoke` service in `docker-compose.yaml` for a working example.
 
 ## Dashboard
 

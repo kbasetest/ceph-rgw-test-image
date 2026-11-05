@@ -6,6 +6,9 @@ services:
       RGW_ACCESS_KEY: "testaccesskey"
       RGW_SECRET_KEY: "testsecretkey"
       RGW_USERS: "user1:access1:secret1;user2:access2:secret2"
+      # Exercised by the `smoke` service below -- exactly 16 alphanumeric characters, see
+      # README.md's "STS / AssumeRole" section for why.
+      RGW_STS_KEY: "teststskey123456"
     ports:
       - "8080:8080"
       - "8445:8443"
@@ -24,9 +27,35 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        set -e
         echo "Ceph is healthy, running smoke test..."
         aws s3 ls --endpoint-url http://ceph:8080
         echo "Smoke test passed."
+
+        echo "Exercising STS AssumeRole..."
+        cat > /tmp/trust.json <<'EOF'
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow",
+         "Principal":{"AWS":["arn:aws:iam:::user/root"]},"Action":["sts:AssumeRole"]}]}
+        EOF
+        cat > /tmp/role-policy.json <<'EOF'
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow",
+         "Action":["s3:*"],"Resource":["arn:aws:s3:::*"]}]}
+        EOF
+        AWS="aws --endpoint-url http://ceph:8080"
+        # Tolerate the role already existing -- the ceph-data volume persists across runs of
+        # this smoke test, same as it does for any other RGW state.
+        $$AWS iam create-role --role-name smoke-role \
+          --assume-role-policy-document file:///tmp/trust.json || true
+        $$AWS iam put-role-policy --role-name smoke-role --policy-name smoke-role-access \
+          --policy-document file:///tmp/role-policy.json
+        ROLE_ARN=$$($$AWS iam get-role --role-name smoke-role --query 'Role.Arn' --output text)
+        ASSUMED_KEY=$$($$AWS sts assume-role --role-arn "$$ROLE_ARN" --role-session-name smoke-session \
+          --query 'Credentials.AccessKeyId' --output text)
+        if [ -z "$$ASSUMED_KEY" ]; then
+          echo "AssumeRole did not return credentials" >&2
+          exit 1
+        fi
+        echo "STS smoke test passed."
 
 volumes:
   ceph-data:

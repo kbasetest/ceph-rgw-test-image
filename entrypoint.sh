@@ -40,6 +40,19 @@ else
     sed -i "s/\[global\]/[global]\n    fsid = $FSID/" /etc/ceph/ceph.conf
 fi
 
+# STS (AssumeRole over the S3 API) is off by default -- set RGW_STS_KEY to turn it on. See
+# https://docs.ceph.com/en/latest/radosgw/STS/ ("STS Configuration") for rgw_sts_key and
+# rgw_s3_auth_use_sts; rgw_enable_apis' "sts" (already on unconditionally above) isn't enough on
+# its own. ceph.conf is rewritten fresh from the image layer on every start (it isn't under the
+# persisted /var/lib/ceph volume), so this always needs reapplying rather than only on first run.
+if [ -n "${RGW_STS_KEY:-}" ]; then
+    if ! [[ "${RGW_STS_KEY}" =~ ^[A-Za-z0-9]{16}$ ]]; then
+        echo "RGW_STS_KEY must be exactly 16 alphanumeric characters (got: '${RGW_STS_KEY}')" >&2
+        exit 1
+    fi
+    sed -i "/\[client.rgw.test\]/a\\    rgw sts key = ${RGW_STS_KEY}\\n    rgw s3 auth use sts = true" /etc/ceph/ceph.conf
+fi
+
 if $FIRST_RUN; then
     # Build a monmap — a binary description of the monitor topology (name + address).
     # The MON needs this before it can initialise its on-disk state.
@@ -139,6 +152,9 @@ if [ -n "${RGW_USERS:-}" ]; then
         IFS=':' read -r _uname _uaccess _usecret <<< "${_entry}"
         echo " Extra user  : ${_uname}  key=${_uaccess}  secret=${_usecret}"
     done
+fi
+if [ -n "${RGW_STS_KEY:-}" ]; then
+    echo " STS         : enabled"
 fi
 echo " Dashboard   : http://127.0.0.1:8443  (admin / admin)"
 echo "========================================="
